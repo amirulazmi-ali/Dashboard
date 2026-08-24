@@ -1,2 +1,8 @@
+## Python package requirements
 PyQt6>=6.5
 pyqtgraph>=0.13
+
+# NOTE: The Qt runtime on some systems (Raspberry Pi / Debian/Ubuntu) also
+# requires the following system package(s) to be installed via apt:
+#   sudo apt install libxcb-cursor0
+# This is a system library, not a pip package, so install it separately.
