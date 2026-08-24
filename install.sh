@@ -42,8 +42,7 @@ while [[ $# -gt 0 ]]; do
       shift
       break
       ;;
-    -*|
-    *)
+    -*|*)
       POSITIONAL+=("$1")
       shift
       ;;
