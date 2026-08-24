@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec "/opt/prod-dashboard/venv/bin/python" "/opt/prod-dashboard/main.py" ""

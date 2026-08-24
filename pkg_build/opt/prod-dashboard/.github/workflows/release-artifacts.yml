@@ -1,0 +1,31 @@
+name: Release packages
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts from build workflow
+        uses: actions/download-artifact@v4
+        with:
+          name: prod-dashboard-amd64-deb
+          path: ./artifacts/amd64 || true
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: prod-dashboard-arm64-deb
+          path: ./artifacts/arm64 || true
+
+      - name: Create release assets
+        run: |
+          ls -la ./artifacts || true
+          # attach artifacts using GitHub CLI if available
+          if command -v gh >/dev/null 2>&1; then
+            gh release upload ${{ github.event.release.tag_name }} ./artifacts/* --clobber || true
+          else
+            echo "gh CLI not available: manual upload required or add gh to the runner"
+          fi

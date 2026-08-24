@@ -1,0 +1,8 @@
+Package: prod-dashboard
+Version: 1.0.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Your Name <you@example.com>
+Depends: python3, python3-venv
+Description: Production Dashboard - factory production monitoring

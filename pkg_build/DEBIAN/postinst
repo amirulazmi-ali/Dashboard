@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+INSTALL_DIR="/opt/prod-dashboard"
+if [ -x "$INSTALL_DIR/venv/bin/pip" ]; then
+  $INSTALL_DIR/venv/bin/python -m pip install --upgrade pip >/dev/null 2>&1 || true
+  if [ -f "$INSTALL_DIR/requirements.txt" ]; then
+    $INSTALL_DIR/venv/bin/pip install -r "$INSTALL_DIR/requirements.txt"
+  fi
+fi
+# update desktop database (best-effort)
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database >/dev/null 2>&1 || true
+fi
+exit 0
