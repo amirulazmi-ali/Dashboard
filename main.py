@@ -11,9 +11,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView, 
                              QMessageBox, QComboBox, QGroupBox, QFormLayout,
                              QGridLayout, QStackedWidget, QFileDialog, QDialog, 
-                             QListWidget, QListWidgetItem, QTextEdit, QCheckBox,
-                             QDateEdit, QTimeEdit)
-from PyQt6.QtWidgets import QAbstractItemView
+                             QListWidget, QListWidgetItem, QTextEdit, QCheckBox)
 from PyQt6.QtCore import Qt, pyqtSignal, QDate, QTime, QTimer, QDateTime
 from PyQt6.QtGui import QColor, QFont, QAction, QActionGroup, QPainter, QPen, QBrush, QKeySequence
 
@@ -168,7 +166,8 @@ class DatabaseManager:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT, shift TEXT, model TEXT, line TEXT,
                 cycle_time REAL, uph INTEGER, leader_name TEXT,
-                supervisor_name TEXT, start_time TEXT
+                supervisor_name TEXT, start_time TEXT,
+                is_npi INTEGER DEFAULT 0
             )
         ''')
         cursor.execute('''
@@ -188,7 +187,9 @@ class DatabaseManager:
         columns = [info[1] for info in cursor.fetchall()]
         if 'start_time' not in columns:
             cursor.execute("ALTER TABLE shift_config ADD COLUMN start_time TEXT")
-            self.conn.commit()
+        if 'is_npi' not in columns:
+            cursor.execute("ALTER TABLE shift_config ADD COLUMN is_npi INTEGER DEFAULT 0")
+        self.conn.commit()
 
     def clear_database(self):
         cursor = self.conn.cursor()
@@ -197,19 +198,19 @@ class DatabaseManager:
         cursor.execute("DELETE FROM sqlite_sequence")
         self.conn.commit()
 
-    def save_shift_config(self, date, shift, model, line, cycle_time, uph, leader_name, supervisor_name, start_time):
+    def save_shift_config(self, date, shift, model, line, cycle_time, uph, leader_name, supervisor_name, start_time, is_npi=0):
         cursor = self.conn.cursor()
         cursor.execute('''
-            INSERT INTO shift_config (date, shift, model, line, cycle_time, uph, leader_name, supervisor_name, start_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (date, shift, model, line, cycle_time, uph, leader_name, supervisor_name, start_time))
+            INSERT INTO shift_config (date, shift, model, line, cycle_time, uph, leader_name, supervisor_name, start_time, is_npi)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (date, shift, model, line, cycle_time, uph, leader_name, supervisor_name, start_time, is_npi))
         self.conn.commit()
         return cursor.lastrowid
 
     def get_last_active_shift(self):
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT id, date, shift, model, line, cycle_time, uph, leader_name, supervisor_name, start_time 
+            SELECT id, date, shift, model, line, cycle_time, uph, leader_name, supervisor_name, start_time, is_npi 
             FROM shift_config ORDER BY id DESC LIMIT 1
         ''')
         return cursor.fetchone()
@@ -217,7 +218,7 @@ class DatabaseManager:
     def get_all_shift_configs(self):
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT id, date, shift, model, line, uph, leader_name, supervisor_name, start_time 
+            SELECT id, date, shift, model, line, uph, leader_name, supervisor_name, start_time, is_npi 
             FROM shift_config ORDER BY id DESC
         ''')
         return cursor.fetchall()
@@ -225,7 +226,7 @@ class DatabaseManager:
     def get_shift_config_by_id(self, shift_id):
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT id, date, shift, model, line, cycle_time, uph, leader_name, supervisor_name, start_time 
+            SELECT id, date, shift, model, line, cycle_time, uph, leader_name, supervisor_name, start_time, is_npi 
             FROM shift_config WHERE id = ?
         ''', (shift_id,))
         return cursor.fetchone()
@@ -263,7 +264,7 @@ class EngineerSetupDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Engineer Setup - Start New Run")
-        self.resize(420, 360)
+        self.resize(420, 390)
         self.setup_data = None
 
         layout = QVBoxLayout(self)
@@ -290,6 +291,10 @@ class EngineerSetupDialog(QDialog):
         self.model_input.setPlaceholderText("e.g. UPPC4040-0F1B2-Q1A")
         self.line_input = QLineEdit()
         self.line_input.setPlaceholderText("e.g. Q1")
+        
+        self.chk_is_npi = QCheckBox("Is NPI (New Product Introduction - No UPH Target)")
+        self.chk_is_npi.toggled.connect(self.on_npi_toggled)
+
         self.plan_qty_input = QLineEdit()
         self.plan_qty_input.setPlaceholderText("e.g. 378")
 
@@ -300,6 +305,7 @@ class EngineerSetupDialog(QDialog):
         form_run.addRow("Leader Name:", self.leader_input)
         form_run.addRow("Model / Part No:", self.model_input)
         form_run.addRow("Line:", self.line_input)
+        form_run.addRow("", self.chk_is_npi)
         form_run.addRow("Plan Qty (UPH):", self.plan_qty_input)
 
         group_run.setLayout(form_run)
@@ -318,6 +324,14 @@ class EngineerSetupDialog(QDialog):
         btn_box.addWidget(self.cancel_btn)
         layout.addLayout(btn_box)
 
+    def on_npi_toggled(self, checked):
+        if checked:
+            self.plan_qty_input.setText("0")
+            self.plan_qty_input.setEnabled(False)
+        else:
+            self.plan_qty_input.setEnabled(True)
+            self.plan_qty_input.clear()
+
     def on_start(self):
         try:
             date_str = self.date_input.text().upper()
@@ -330,9 +344,11 @@ class EngineerSetupDialog(QDialog):
             leader = self.leader_input.text().strip()
             model = self.model_input.text().strip()
             line = self.line_input.text().strip()
-            uph = int(self.plan_qty_input.text())
+            
+            is_npi = 1 if self.chk_is_npi.isChecked() else 0
+            uph = 0 if is_npi else int(self.plan_qty_input.text())
 
-            self.setup_data = (date_str, shift_key, shift_code, start_qtime, start_time_str, supv, leader, model, line, uph)
+            self.setup_data = (date_str, shift_key, shift_code, start_qtime, start_time_str, supv, leader, model, line, uph, is_npi)
             self.accept()
         except ValueError:
             QMessageBox.critical(self, "Error", "Please fill all fields with valid information (Plan Qty must be a number).")
@@ -430,8 +446,9 @@ class ShiftHistoryDialog(QDialog):
             return
 
         for rec in records:
-            s_id, date, shift, model, line, uph, leader, supervisor, start_time = rec
-            display_text = f"ID #{s_id} | {date} | {shift} | Line {line} | Model: {model} | UPH: {uph} (Start: {start_time})"
+            s_id, date, shift, model, line, uph, leader, supervisor, start_time, is_npi = rec
+            uph_str = "NPI" if is_npi else f"{uph} UPH"
+            display_text = f"ID #{s_id} | {date} | {shift} | Line {line} | Model: {model} | Target: {uph_str} (Start: {start_time})"
             item = QListWidgetItem(display_text)
             item.setData(Qt.ItemDataRole.UserRole, s_id)
             self.list_widget.addItem(item)
@@ -457,6 +474,7 @@ class FallbackChartCanvas(QWidget):
         self.actuals = []
         self.hourly_plans = []
         self.logged_mask = []
+        self.is_npi = False
         self.show_target = True
         self.show_trend = True
         self.show_labels = True
@@ -469,11 +487,12 @@ class FallbackChartCanvas(QWidget):
         self.color_code_bars = color_code
         self.update()
 
-    def set_data(self, hours, actuals, hourly_plans, logged_mask):
+    def set_data(self, hours, actuals, hourly_plans, logged_mask, is_npi=False):
         self.hours = hours
         self.actuals = actuals
         self.hourly_plans = hourly_plans
         self.logged_mask = logged_mask
+        self.is_npi = is_npi
         self.update()
 
     def clear_canvas(self):
@@ -481,6 +500,7 @@ class FallbackChartCanvas(QWidget):
         self.actuals = []
         self.hourly_plans = []
         self.logged_mask = []
+        self.is_npi = False
         self.update()
 
     def paintEvent(self, event):
@@ -494,7 +514,7 @@ class FallbackChartCanvas(QWidget):
 
         margin = 60
         chart_w, chart_h = w - (margin * 2), h - (margin * 2)
-        max_plan = max(self.hourly_plans) if self.hourly_plans else 1
+        max_plan = max(self.hourly_plans) if self.hourly_plans and not self.is_npi else 1
         max_act = max(self.actuals) if self.actuals else 1
         max_val = max(max_plan, max_act, 1) + 50
 
@@ -516,39 +536,36 @@ class FallbackChartCanvas(QWidget):
             target = self.hourly_plans[i] if i < len(self.hourly_plans) else 0
             val = self.actuals[i] if i < len(self.actuals) else 0
             slot_x = margin + (i * slot_w)
-            # draw plan bars for all slots (muted/visible regardless of logged state)
-            if self.show_target:
-                plan_x = slot_x + (slot_w * 0.1)
-                plan_h = (target / max_val) * chart_h
-                plan_y = margin + chart_h - plan_h
-                painter.setBrush(QBrush(QColor("#f59e0b")))
-                painter.setPen(QPen(QColor("#d97706")))
-                painter.drawRect(int(plan_x), int(plan_y), int(bar_w), int(plan_h))
-                if self.show_labels and target > 0:
-                    painter.setPen(QPen(QColor("#fef08a")))
-                    painter.drawText(int(plan_x), int(plan_y) - 5, str(target))
+            
+            if is_logged:
+                if self.show_target and not self.is_npi:
+                    plan_x = slot_x + (slot_w * 0.1)
+                    plan_h = (target / max_val) * chart_h
+                    plan_y = margin + chart_h - plan_h
+                    painter.setBrush(QBrush(QColor("#f59e0b")))
+                    painter.setPen(QPen(QColor("#d97706")))
+                    painter.drawRect(int(plan_x), int(plan_y), int(bar_w), int(plan_h))
+                    if self.show_labels and target > 0:
+                        painter.setPen(QPen(QColor("#fef08a")))
+                        painter.drawText(int(plan_x), int(plan_y) - 5, str(target))
 
-            act_x = slot_x + (slot_w * 0.5) if self.show_target else slot_x + (slot_w * 0.25)
-            actual_bar_width = bar_w if self.show_target else slot_w * 0.5
+                act_x = slot_x + (slot_w * 0.5) if (self.show_target and not self.is_npi) else slot_x + (slot_w * 0.25)
+                actual_bar_width = bar_w if (self.show_target and not self.is_npi) else slot_w * 0.5
 
-            # choose color based on logged state and value
-            if self.color_code_bars:
-                if not is_logged:
-                    bar_color, border_color = (QColor("#6b7280"), QColor("#4b5563"))
-                else:
+                if self.color_code_bars and not self.is_npi:
                     bar_color, border_color = (QColor("#16a34a"), QColor("#15803d")) if val >= target and target > 0 else (QColor("#dc2626"), QColor("#b91c1c"))
-            else:
-                bar_color, border_color = QColor("#3b82f6"), QColor("#1d4ed8")
+                else:
+                    bar_color, border_color = QColor("#3b82f6"), QColor("#1d4ed8")
 
-            act_h = (val / max_val) * chart_h
-            act_y = margin + chart_h - act_h
-            painter.setBrush(QBrush(bar_color))
-            painter.setPen(QPen(border_color))
-            painter.drawRect(int(act_x), int(act_y), int(actual_bar_width), int(act_h))
+                act_h = (val / max_val) * chart_h
+                act_y = margin + chart_h - act_h
+                painter.setBrush(QBrush(bar_color))
+                painter.setPen(QPen(border_color))
+                painter.drawRect(int(act_x), int(act_y), int(actual_bar_width), int(act_h))
 
-            if self.show_labels and val > 0:
-                painter.setPen(QPen(QColor("#ffffff")))
-                painter.drawText(int(act_x), int(act_y) - 5, str(val))
+                if self.show_labels and val > 0:
+                    painter.setPen(QPen(QColor("#ffffff")))
+                    painter.drawText(int(act_x), int(act_y) - 5, str(val))
 
             painter.setPen(QPen(QColor("#cbd5e1")))
             painter.drawText(int(slot_x + (slot_w * 0.15)), margin + chart_h + 25, self.hours[i][:4])
@@ -559,7 +576,7 @@ class FallbackChartCanvas(QWidget):
             logged_indices = [i for i, l in enumerate(self.logged_mask) if l]
             for idx in range(len(logged_indices) - 1):
                 i1, i2 = logged_indices[idx], logged_indices[idx + 1]
-                offset_x = (slot_w * 0.675) if self.show_target else (slot_w * 0.5)
+                offset_x = (slot_w * 0.675) if (self.show_target and not self.is_npi) else (slot_w * 0.5)
                 x1 = margin + (i1 * slot_w) + offset_x
                 y1 = margin + chart_h - (trend_y[i1] / max_val * chart_h)
                 x2 = margin + (i2 * slot_w) + offset_x
@@ -637,10 +654,6 @@ class DashboardWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
-        # Make display table read-only and non-interactive (monitor-only)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.setStyleSheet("""
             QTableWidget { font-size: 18px; font-weight: bold; gridline-color: #cbd5e1; }
             QHeaderView::section { background-color: #1e293b; color: white; font-size: 18px; font-weight: bold; padding: 10px; border: 1px solid #0f172a; }
@@ -727,11 +740,12 @@ class DashboardWindow(QMainWindow):
                 self.table.setItem(i, j, empty_item)
         
     def update_dashboard(self, shift_data, logs, active_hours):
-        db_id, date, shift, model, line, cycle_time, uph, leader, supervisor, start_time = shift_data
+        db_id, date, shift, model, line, cycle_time, uph, leader, supervisor, start_time, is_npi = shift_data
         
+        model_display = f"{model} (NPI)" if is_npi else model
         self.lbl_date.setText(f"DATE: {date}")
         self.lbl_shift.setText(f"SHIFT: {shift}")
-        self.lbl_model.setText(f"MODEL: {model}")
+        self.lbl_model.setText(f"MODEL: {model_display}")
         self.lbl_supv.setText(f"SUPV: {supervisor}")
         self.lbl_line.setText(f"LINE: {line}")
         self.lbl_leader.setText(f"LEADER: {leader}")
@@ -740,7 +754,7 @@ class DashboardWindow(QMainWindow):
         hourly_plans, cum_plans = calculate_plan_targets(active_hours, uph, start_time)
 
         for i in range(12):
-            plan_str = f"{hourly_plans[i]} / {cum_plans[i]}"
+            plan_str = "NPI" if is_npi else f"{hourly_plans[i]} / {cum_plans[i]}"
             plan_item = QTableWidgetItem(plan_str)
             plan_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(i, 1, plan_item)
@@ -767,13 +781,16 @@ class DashboardWindow(QMainWindow):
             actual_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, 2, actual_item)
             
-            delta = cumulative - cum_plan_target
-            delta_item = QTableWidgetItem(str(delta))
-            delta_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            if delta < 0:
-                delta_item.setForeground(QColor("#dc2626"))
+            if is_npi:
+                delta_item = QTableWidgetItem("-")
             else:
-                delta_item.setForeground(QColor("#16a34a"))
+                delta = cumulative - cum_plan_target
+                delta_item = QTableWidgetItem(str(delta))
+                if delta < 0:
+                    delta_item.setForeground(QColor("#dc2626"))
+                else:
+                    delta_item.setForeground(QColor("#16a34a"))
+            delta_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, 3, delta_item)
             
             yield_perc = ((hourly_actual - scrap) / hourly_actual) * 100 if hourly_actual > 0 else 0.0
@@ -822,68 +839,61 @@ class DashboardWindow(QMainWindow):
                 for s_i in range(r, r + span):
                     visited.add(s_i)
 
-        self.update_chart(active_hours, actuals_list, hourly_plans, logged_mask)
+        self.update_chart(active_hours, actuals_list, hourly_plans, logged_mask, is_npi)
 
-    def update_chart(self, hours, actuals, hourly_plans, logged_mask):
+    def update_chart(self, hours, actuals, hourly_plans, logged_mask, is_npi=False):
         if HAS_PYQTGRAPH:
             self.chart_widget.clear()
             
-            # Always show all time slots on the x-axis
-            x_all = list(range(len(hours)))
+            x_logged = [i for i, l in enumerate(logged_mask) if l]
             ticks = [(i, h[:4]) for i, h in enumerate(hours)]
             ax = self.chart_widget.getAxis('bottom')
             ax.setTicks([ticks])
+            
+            if not x_logged:
+                return
 
-            # Prepare full-length plan/actual lists (zeros for missing actuals)
-            full_plans = list(hourly_plans)
-            full_actuals = [actuals[i] if i < len(actuals) else 0 for i in x_all]
-
-            if self.opt_show_target:
-                x_plan = [p - 0.18 for p in x_all]
-                bg_plan = pg.BarGraphItem(x=x_plan, height=full_plans, width=0.35, brush='#f59e0b', name="Plan Target")
+            filtered_plans = [hourly_plans[i] for i in x_logged]
+            filtered_actuals = [actuals[i] for i in x_logged]
+            
+            # Show plan target bars ONLY if target display enabled AND NOT an NPI line
+            if self.opt_show_target and not is_npi:
+                x_plan = [p - 0.18 for p in x_logged]
+                bg_plan = pg.BarGraphItem(x=x_plan, height=filtered_plans, width=0.35, brush='#f59e0b', name="Plan Target")
                 self.chart_widget.addItem(bg_plan)
 
-            x_act = [p + 0.18 for p in x_all] if self.opt_show_target else x_all
-            act_width = 0.35 if self.opt_show_target else 0.5
-
+            x_act = [p + 0.18 for p in x_logged] if (self.opt_show_target and not is_npi) else x_logged
+            act_width = 0.35 if (self.opt_show_target and not is_npi) else 0.5
+            
             act_brushes = []
-            for i, (act, tgt) in enumerate(zip(full_actuals, full_plans)):
-                if self.opt_color_code:
-                    # If there's no logged value, use muted color
-                    if (i >= len(logged_mask)) or (not logged_mask[i]):
-                        act_brushes.append(QColor("#6b7280"))
-                    else:
-                        act_brushes.append(QColor("#16a34a") if act >= tgt and tgt > 0 else QColor("#dc2626"))
+            for act, tgt in zip(filtered_actuals, filtered_plans):
+                if self.opt_color_code and not is_npi:
+                    act_brushes.append(QColor("#16a34a") if act >= tgt and tgt > 0 else QColor("#dc2626"))
                 else:
                     act_brushes.append(QColor("#3b82f6"))
-
-            bg_act = pg.BarGraphItem(x=x_act, height=full_actuals, width=act_width, brushes=act_brushes, name="Actual Output")
+                    
+            bg_act = pg.BarGraphItem(x=x_act, height=filtered_actuals, width=act_width, brushes=act_brushes, name="Actual Output")
             self.chart_widget.addItem(bg_act)
-
-            if self.opt_show_trend:
-                trend_full = calculate_trend_line(full_actuals, logged_mask)
-                logged_indices = [i for i, l in enumerate(logged_mask) if i < len(logged_mask) and l]
-                if len(logged_indices) >= 2:
-                    y_solid = [trend_full[i] for i in logged_indices]
-                    self.chart_widget.plot(logged_indices, y_solid, pen=pg.mkPen(color='#38bdf8', width=3), symbol='o', symbolBrush='#38bdf8', name="Performance Trend")
-                elif len(logged_indices) == 1:
-                    i = logged_indices[0]
-                    self.chart_widget.plot([i], [trend_full[i]], pen=pg.mkPen(color='#38bdf8', width=0), symbol='o', symbolBrush='#38bdf8')
-
+            
+            if self.opt_show_trend and len(x_logged) >= 2:
+                trend_full = calculate_trend_line(actuals, logged_mask)
+                trend_filtered = [trend_full[i] for i in x_logged]
+                self.chart_widget.plot(x_act, trend_filtered, pen=pg.mkPen(color='#38bdf8', width=3), symbol='o', symbolBrush='#38bdf8', name="Performance Trend")
+            
             if self.opt_show_labels:
-                for idx in x_all:
-                    if self.opt_show_target and full_plans[idx] > 0:
-                        txt_p = pg.TextItem(text=str(full_plans[idx]), color='#fef08a', anchor=(0.5, 1))
-                        txt_p.setPos(x_plan[idx], full_plans[idx])
+                for idx, i in enumerate(x_logged):
+                    if self.opt_show_target and not is_npi and filtered_plans[idx] > 0:
+                        txt_p = pg.TextItem(text=str(filtered_plans[idx]), color='#fef08a', anchor=(0.5, 1))
+                        txt_p.setPos(x_plan[idx], filtered_plans[idx])
                         self.chart_widget.addItem(txt_p)
-
-                    if full_actuals[idx] > 0:
-                        txt_a = pg.TextItem(text=str(full_actuals[idx]), color='#ffffff', anchor=(0.5, 1))
-                        txt_a.setPos(x_act[idx], full_actuals[idx])
+                    
+                    if filtered_actuals[idx] > 0:
+                        txt_a = pg.TextItem(text=str(filtered_actuals[idx]), color='#ffffff', anchor=(0.5, 1))
+                        txt_a.setPos(x_act[idx], filtered_actuals[idx])
                         self.chart_widget.addItem(txt_a)
         else:
             self.chart_widget.set_chart_options(self.opt_show_target, self.opt_show_trend, self.opt_show_labels, self.opt_color_code)
-            self.chart_widget.set_data(hours, actuals, hourly_plans, logged_mask)
+            self.chart_widget.set_data(hours, actuals, hourly_plans, logged_mask, is_npi)
 
     def closeEvent(self, event):
         QApplication.quit()
@@ -998,7 +1008,7 @@ class OperatorWindow(QMainWindow):
     def open_engineer_setup_dialog(self):
         dialog = EngineerSetupDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.setup_data:
-            date_str, shift_key, shift_code, start_qtime, start_time_str, supv, leader, model, line, uph = dialog.setup_data
+            date_str, shift_key, shift_code, start_qtime, start_time_str, supv, leader, model, line, uph, is_npi = dialog.setup_data
             
             self.active_hours = SHIFT_HOURS[shift_key]
             self.hour_combo.clear()
@@ -1013,7 +1023,7 @@ class OperatorWindow(QMainWindow):
             self.sync_time_pickers()
             cycle_time = 0.0
             
-            self.active_shift_id = self.db.save_shift_config(date_str, shift_code, model, line, cycle_time, uph, leader, supv, start_time_str)
+            self.active_shift_id = self.db.save_shift_config(date_str, shift_code, model, line, cycle_time, uph, leader, supv, start_time_str, is_npi)
             
             cursor = self.db.conn.cursor()
             cursor.execute("SELECT * FROM shift_config WHERE id = ?", (self.active_shift_id,))
@@ -1022,7 +1032,8 @@ class OperatorWindow(QMainWindow):
             self.op_group.setEnabled(True)
             QTimer.singleShot(0, self.machine_total_input.setFocus)
             
-            QMessageBox.information(self, "Run Started", f"New run started for {shift_key} at {start_time_str}!")
+            npi_msg = " (NPI Line)" if is_npi else ""
+            QMessageBox.information(self, "Run Started", f"New run started for {shift_key} at {start_time_str}{npi_msg}!")
             self.refresh_dashboard()
 
     def open_package_checker(self):
@@ -1090,7 +1101,7 @@ class OperatorWindow(QMainWindow):
             if filename:
                 cursor = self.db.conn.cursor()
                 cursor.execute('''
-                    SELECT s.date, s.shift, s.line, s.model, s.supervisor_name, s.leader_name, s.uph, s.start_time,
+                    SELECT s.date, s.shift, s.line, s.model, s.supervisor_name, s.leader_name, s.uph, s.start_time, s.is_npi,
                            r.hour_block, r.cumulative_input, r.hourly_actual, r.scrap_input, r.downtime, r.remarks, r.timestamp
                     FROM raw_machine_logs r
                     JOIN shift_config s ON r.shift_id = s.id
@@ -1099,7 +1110,7 @@ class OperatorWindow(QMainWindow):
                 with open(filename, 'w', newline='', encoding='utf-8') as f:
                     writer = csv.writer(f)
                     writer.writerow([
-                        "Date", "Shift", "Line", "Model", "Supervisor", "Leader", "Plan UPH", "Start Time",
+                        "Date", "Shift", "Line", "Model", "Supervisor", "Leader", "Plan UPH", "Start Time", "Is NPI",
                         "Hour Block", "Cumulative Total", "Hourly Actual", "Scrap", "Downtime", "Remarks", "Logged Time"
                     ])
                     writer.writerows(rows)
@@ -1116,7 +1127,7 @@ class OperatorWindow(QMainWindow):
     def show_about(self):
         QMessageBox.about(
             self, "About Digital Production Board",
-            "<b>Digital Production Board v2.0</b><br><br>"
+            "<b>Digital Production Board v2.2</b><br><br>"
             "A dual-screen factory monitoring tool designed for Raspberry Pi & Debian OS.<br><br>"
             "<b>Developer:</b> @!&mierol<br>"
             "<b>Database:</b> Local SQLite3<br>"
